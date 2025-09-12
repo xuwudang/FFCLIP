@@ -9,8 +9,8 @@ import clip.myAtt as myAtt
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-
 from FFCLIP_model.PPA import PPA
+
 from FFCLIP_model.RCM import RCM
 
 
