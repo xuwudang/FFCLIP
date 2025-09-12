@@ -10,6 +10,7 @@ import os
 from torchvision.transforms import Compose, Normalize
 from .Decoder.TransDecoder import DecoderTransformer
 from FFCLIP_model.PAR import PAR
+from FFCLIP_model.WFF import WFF, extract_edge_feature
 
 
 def Normalize_clip():
@@ -80,6 +81,10 @@ class FFCLIP(nn.Module):
         self.cam_bg_thres = 1
         self.encoder.eval()
         self.par = PAR(num_iter=20, dilations=[1,2,4,8,12,24]).cuda()
+        
+        # Add WFF module for refinedCAM enhancement
+        self.wff = WFF(channel=self.embedding_dim).cuda()
+        
         self.iter_num = 0
         self.require_all_fts = True
 
@@ -161,6 +166,25 @@ class FFCLIP(nn.Module):
 
             with torch.no_grad():
                 cam_labels = _refine_cams(self.par, img[i], cams, valid_key)
+                
+                # Apply WFF module to enhance refinedCAM with edge features
+                if mode == 'train' or self.iter_num > 20000:  # Apply WFF after some training
+                    # Extract edge features from the original image
+                    edge_feature = extract_edge_feature(img[i].unsqueeze(0))
+                    edge_feature = edge_feature.repeat(1, self.embedding_dim, 1, 1).cuda()
+                    
+                    # Reshape cam_labels for WFF processing
+                    cam_labels_2d = cam_labels.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+                    cam_labels_2d = F.interpolate(cam_labels_2d.float(), size=(28, 28), mode='bilinear', align_corners=False)
+                    cam_labels_2d = cam_labels_2d.repeat(1, self.embedding_dim, 1, 1)  # [1, C, H, W]
+                    
+                    # Apply WFF fusion
+                    enhanced_cam = self.wff(cam_labels_2d, edge_feature)
+                    
+                    # Convert back to original format
+                    enhanced_cam = F.interpolate(enhanced_cam, size=(h, w), mode='bilinear', align_corners=False)
+                    enhanced_cam = enhanced_cam.mean(dim=1).squeeze(0)  # [H, W]
+                    cam_labels = enhanced_cam.argmax(dim=0)
 
             cam_list.append(cam_labels)
 

@@ -6,6 +6,11 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 import clip.myAtt as myAtt
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from FFCLIP_model.PPA import PPA
+from FFCLIP_model.RCM import RCM
 
 
 def upsample_pos_emb(emb, new_size):
@@ -340,6 +345,12 @@ class CLIP(nn.Module):
 
         self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        
+        # Add PPA module for text encoder enhancement
+        self.ppa = PPA(dim=transformer_width, qk_dim=16, pdim=32)
+        
+        # Add RCM module for image encoder enhancement
+        self.rcm = RCM(dim=vision_width, mlp_ratio=2, drop_path=0.1)
 
         self.initialize_parameters()
 
@@ -386,7 +397,17 @@ class CLIP(nn.Module):
 
     def encode_image(self, image, H, W, require_all_fts=False):
         f_x, f_attn = self.visual(image.type(self.dtype), H, W, require_all_fts=require_all_fts)
-        # f = self.visual(image.type(self.dtype), H, W, require_all_fts=require_all_fts)
+        
+        # Apply RCM module for enhanced image representation
+        if len(f_x.shape) == 4:  # [B, C, H, W] format
+            f_x = self.rcm(f_x)
+        elif len(f_x.shape) == 3:  # [B, N, C] format, need to reshape
+            B, N, C = f_x.shape
+            h = w = int(N ** 0.5)
+            f_x_2d = f_x.reshape(B, C, h, w)
+            f_x_2d = self.rcm(f_x_2d)
+            f_x = f_x_2d.reshape(B, N, C)
+        
         return f_x, f_attn
 
     def encode_text(self, text):
@@ -397,6 +418,9 @@ class CLIP(nn.Module):
         x, attn_weight = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_final(x).type(self.dtype)
+
+        # Apply PPA module for enhanced text representation
+        x = self.ppa(x)  # [batch_size, n_ctx, transformer.width]
 
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)

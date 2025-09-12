@@ -8,6 +8,7 @@ from clip.clip_tool import generate_clip_fts
 import os
 from torchvision.transforms import Compose, Normalize
 from .Decoder.TransDecoder_seg import DecoderTransformer
+from FFCLIP_model.WFF import WFF, extract_edge_feature
 
 
 
@@ -82,6 +83,10 @@ class FFCLIP(nn.Module):
         self.root_path = os.path.join(dataset_root_path, 'JPEGImages')
         self.cam_bg_thres = 1
         self.encoder.eval()
+        
+        # Add WFF module for segmentation enhancement
+        self.wff = WFF(channel=self.embedding_dim).cuda()
+        
         self.iter_num = 0
         self.require_all_fts = True
 
@@ -118,6 +123,14 @@ class FFCLIP(nn.Module):
 
         fts = self.decoder_fts_fuse(all_img_tokens)
 
+        # Apply WFF module to enhance segmentation features with edge information
+        if mode == 'train' or self.iter_num > 5000:  # Apply WFF after some training
+            # Extract edge features from the original image
+            edge_feature = extract_edge_feature(img)
+            edge_feature = edge_feature.repeat(1, self.embedding_dim, 1, 1).cuda()
+            
+            # Apply WFF fusion to enhance features
+            fts = self.wff(fts, edge_feature)
         
         seg, seg_attn_weight_list = self.decoder(fts)
 
